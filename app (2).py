@@ -2,7 +2,6 @@
 import os
 import json
 from datetime import datetime, timezone
-
 import requests
 import pandas as pd
 import plotly.express as px
@@ -10,15 +9,14 @@ import streamlit as st
 
 
 # =========================================================
-# ORCA - Marine Ecosystem Intelligence
-# Six-agent collaborative screening prototype
+# ORCA - Ocean Reasoning Collaborative Agency
+# Six-agent marine intelligence prototype
 # =========================================================
 
 st.set_page_config(
     page_title="ORCA | Marine Intelligence",
     page_icon="🌊",
     layout="wide",
-    initial_sidebar_state="expanded",
 )
 
 REQUEST_TIMEOUT = 20
@@ -35,46 +33,37 @@ REGIONS = {
     "Southern Ocean": (-55.0, 30.0),
 }
 
-# ----------------------- Styling -------------------------
+# ----------------------- UI styling -----------------------
 
 st.markdown("""
 <style>
 .stApp {
-    background: linear-gradient(150deg, #071522 0%, #0a2235 55%, #071522 100%);
+    background: linear-gradient(145deg, #071522, #0b2638, #071522);
     color: #eaf6ff;
 }
 [data-testid="stSidebar"] {
     background: #081827;
-    border-right: 1px solid #193c50;
+    border-right: 1px solid #24485d;
 }
-h1, h2, h3 {
-    color: #e9f7ff !important;
+h1, h2, h3, h4 {
+    color: #eaf6ff !important;
 }
 p, label, li {
     color: #c2d7e7;
 }
-.orca-hero {
+.hero {
     padding: 28px;
     border: 1px solid #24516a;
     border-radius: 20px;
     background: linear-gradient(120deg, #10334a, #0b1e30);
-    margin-bottom: 20px;
+    margin-bottom: 22px;
 }
-.orca-subtitle {
-    color: #a7c7dc;
-    font-size: 15px;
-}
-.agent-box {
+.agent {
     background: #0c2435;
     border: 1px solid #24485d;
     border-radius: 15px;
     padding: 16px;
-    margin-bottom: 10px;
-}
-.status {
-    font-size: 12px;
-    font-weight: 700;
-    letter-spacing: 1px;
+    margin-bottom: 12px;
 }
 div[data-testid="stMetric"] {
     background: #0c2435;
@@ -85,85 +74,67 @@ div[data-testid="stMetric"] {
 div[data-testid="stMetric"] label {
     color: #a9c9de !important;
 }
-hr {
-    border-color: #234358;
-}
 </style>
 """, unsafe_allow_html=True)
 
 
-# ----------------------- Helpers -------------------------
+# ------------------------- Helpers -----------------------
 
-def safe_float(value):
-    """Convert a real numeric value to float; otherwise None."""
+def number(value):
     if value is None or isinstance(value, bool):
         return None
     try:
-        number = float(value)
-        if pd.isna(number):
-            return None
-        return number
+        value = float(value)
+        return value if pd.notna(value) else None
     except (TypeError, ValueError):
         return None
 
 
 def fmt(value, unit="", digits=2):
-    value = safe_float(value)
-    if value is None:
-        return "Unavailable"
-    return f"{value:.{digits}f}{unit}"
+    value = number(value)
+    return "Unavailable" if value is None else f"{value:.{digits}f}{unit}"
 
 
-def get_nested(data, *keys):
-    current = data
-    for key in keys:
-        if not isinstance(current, dict):
-            return None
-        current = current.get(key)
-    return current
+def safe_json(value):
+    return json.dumps(
+        value,
+        indent=2,
+        ensure_ascii=False,
+        default=str,
+    )
 
 
-def safe_json(data):
-    try:
-        return json.dumps(data, indent=2, ensure_ascii=False, default=str)
-    except Exception:
-        return str(data)
-
-
-def show_evidence(title, data):
-    """Use plain text rather than Streamlit's JSON syntax renderer."""
+def evidence(title, value):
+    # Plain text avoids the JSON syntax highlighter issue.
     with st.expander(title):
-        st.text(safe_json(data))
+        st.text(safe_json(value))
 
 
-def agent_card(emoji, title, status, message):
+def show_agent(emoji, name, status, message):
     st.markdown(
         f"""
-        <div class="agent-box">
+        <div class="agent">
             <div style="font-size:25px">{emoji}</div>
-            <h4 style="margin-bottom:6px">{title}</h4>
-            <div class="status">{status}</div>
-            <p style="margin-top:10px">{message}</p>
+            <h4>{name}</h4>
+            <strong>{status}</strong>
+            <p>{message}</p>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
 
-# -------------------- Live data API ----------------------
+# --------------------- API integrations ------------------
 
 @st.cache_data(ttl=CACHE_SECONDS, show_spinner=False)
-def fetch_live_data(latitude, longitude):
+def fetch_marine_weather(latitude, longitude):
     result = {
         "marine": {},
-        "marine_hourly": {},
+        "hourly": {},
         "weather": {},
-        "marine_error": None,
-        "weather_error": None,
+        "errors": {},
         "fetched_at_utc": datetime.now(timezone.utc).isoformat(),
     }
-
-    marine_url = "https://marine-api.open-meteo.com/v1/marine"
 
     marine_params = {
         "latitude": latitude,
@@ -172,9 +143,7 @@ def fetch_live_data(latitude, longitude):
             "wave_height,wave_direction,wave_period,"
             "sea_surface_temperature,ocean_current_velocity"
         ),
-        "hourly": (
-            "sea_surface_temperature,wave_height"
-        ),
+        "hourly": "sea_surface_temperature,wave_height",
         "past_days": 7,
         "forecast_days": 1,
         "timezone": "UTC",
@@ -183,20 +152,18 @@ def fetch_live_data(latitude, longitude):
 
     try:
         response = requests.get(
-            marine_url,
+            "https://marine-api.open-meteo.com/v1/marine",
             params=marine_params,
             timeout=REQUEST_TIMEOUT,
         )
         response.raise_for_status()
-        payload = response.json()
+        data = response.json()
 
-        result["marine"] = payload.get("current", {}) or {}
-        result["marine_hourly"] = payload.get("hourly", {}) or {}
+        result["marine"] = data.get("current", {}) or {}
+        result["hourly"] = data.get("hourly", {}) or {}
 
     except Exception as exc:
-        result["marine_error"] = str(exc)
-
-    weather_url = "https://api.open-meteo.com/v1/forecast"
+        result["errors"]["marine"] = str(exc)
 
     weather_params = {
         "latitude": latitude,
@@ -210,24 +177,95 @@ def fetch_live_data(latitude, longitude):
 
     try:
         response = requests.get(
-            weather_url,
+            "https://api.open-meteo.com/v1/forecast",
             params=weather_params,
             timeout=REQUEST_TIMEOUT,
         )
         response.raise_for_status()
-        payload = response.json()
-        result["weather"] = payload.get("current", {}) or {}
+        result["weather"] = response.json().get("current", {}) or {}
 
     except Exception as exc:
-        result["weather_error"] = str(exc)
+        result["errors"]["weather"] = str(exc)
 
     return result
 
 
-# ----------------------- Agents --------------------------
+def fetch_chlorophyll(latitude, longitude):
+    """
+    Optional adapter for a verified chlorophyll service.
 
-def temperature_agent(marine):
-    sst = safe_float(marine.get("sea_surface_temperature"))
+    Configure ORCA_CHLOROPHYLL_API_URL to your own deployed
+    data endpoint. It must accept latitude and longitude query
+    parameters and return JSON containing:
+        chlorophyll_a_mg_m3: numeric concentration
+        source: source/product name
+        observation_time: timestamp (recommended)
+
+    This does not pretend that Open-Meteo provides chlorophyll.
+    """
+    endpoint = os.getenv("ORCA_CHLOROPHYLL_API_URL", "").strip()
+
+    if not endpoint:
+        try:
+            endpoint = st.secrets.get(
+                "ORCA_CHLOROPHYLL_API_URL", ""
+            ).strip()
+        except Exception:
+            endpoint = ""
+
+    if not endpoint:
+        return {
+            "value": None,
+            "source": None,
+            "time": None,
+            "error": "No chlorophyll data endpoint configured.",
+        }
+
+    try:
+        response = requests.get(
+            endpoint,
+            params={
+                "latitude": latitude,
+                "longitude": longitude,
+            },
+            timeout=REQUEST_TIMEOUT,
+        )
+        response.raise_for_status()
+        data = response.json()
+
+        value = number(data.get("chlorophyll_a_mg_m3"))
+
+        if value is None or value < 0:
+            return {
+                "value": None,
+                "source": data.get("source"),
+                "time": data.get("observation_time"),
+                "error": (
+                    "Endpoint returned no valid non-negative "
+                    "chlorophyll_a_mg_m3 value."
+                ),
+            }
+
+        return {
+            "value": value,
+            "source": data.get("source", "Configured endpoint"),
+            "time": data.get("observation_time"),
+            "error": None,
+        }
+
+    except Exception as exc:
+        return {
+            "value": None,
+            "source": None,
+            "time": None,
+            "error": str(exc),
+        }
+
+
+# ------------------------ Agents -------------------------
+
+def sea_temperature_agent(marine):
+    sst = number(marine.get("sea_surface_temperature"))
 
     if sst is None:
         return {
@@ -235,8 +273,8 @@ def temperature_agent(marine):
             "status": "DATA MISSING",
             "value": None,
             "message": (
-                "No sea-surface temperature was returned. "
-                "Air temperature is not a substitute."
+                "No SST was returned. Air temperature is not "
+                "a substitute for sea-surface temperature."
             ),
         }
 
@@ -245,15 +283,14 @@ def temperature_agent(marine):
         "status": "OBSERVATION RECEIVED",
         "value": sst,
         "message": (
-            f"Marine API reported sea-surface temperature "
-            f"of {sst:.2f} °C. This is an observation/model "
-            "product, not by itself an ecological health verdict."
+            f"Marine API returned an SST value of {sst:.2f} °C. "
+            "This value alone does not establish ecosystem health."
         ),
     }
 
 
-def chlorophyll_agent(chlorophyll):
-    value = safe_float(chlorophyll)
+def chlorophyll_agent(chl):
+    value = number(chl.get("value"))
 
     if value is None:
         return {
@@ -261,154 +298,131 @@ def chlorophyll_agent(chlorophyll):
             "status": "DATA MISSING",
             "value": None,
             "message": (
-                "No verified chlorophyll-a concentration was supplied. "
-                "A dedicated ocean-colour data source is required."
+                "No verified chlorophyll-a observation is available. "
+                "Connect a satellite-derived ocean-colour data source."
             ),
-        }
-
-    if value < 0:
-        return {
-            "name": "Chlorophyll Agent",
-            "status": "INVALID INPUT",
-            "value": None,
-            "message": "Chlorophyll concentration cannot be negative.",
         }
 
     return {
         "name": "Chlorophyll Agent",
-        "status": "INPUT RECEIVED",
+        "status": "OBSERVATION RECEIVED",
         "value": value,
         "message": (
-            f"Supplied chlorophyll-a value: {value:.3f} mg/m³. "
-            "Use only a verified measurement and record its source."
+            f"Chlorophyll-a: {value:.3f} mg/m³. "
+            f"Source: {chl.get('source') or 'Not identified'}. "
+            "Check timestamp, quality flags, and product metadata."
         ),
     }
 
 
 def weather_agent(marine, weather):
-    wind = safe_float(weather.get("wind_speed_10m"))
-    rain = safe_float(weather.get("precipitation"))
-    waves = safe_float(marine.get("wave_height"))
-    air_temp = safe_float(weather.get("temperature_2m"))
+    wind = number(weather.get("wind_speed_10m"))
+    rain = number(weather.get("precipitation"))
+    air = number(weather.get("temperature_2m"))
+    wave = number(marine.get("wave_height"))
 
     available = any(
-        v is not None for v in [wind, rain, waves, air_temp]
+        x is not None for x in [wind, rain, air, wave]
     )
 
-    if not available:
-        status = "DATA MISSING"
-        message = "No usable weather or marine observations were returned."
-    else:
-        status = "OBSERVATIONS RECEIVED"
-        parts = []
-        if wind is not None:
-            parts.append(f"wind {wind:.1f} km/h")
-        if waves is not None:
-            parts.append(f"waves {waves:.2f} m")
-        if rain is not None:
-            parts.append(f"precipitation {rain:.1f} mm")
-        if air_temp is not None:
-            parts.append(f"air temperature {air_temp:.1f} °C")
-
-        message = "Available conditions: " + ", ".join(parts) + "."
+    details = []
+    if wind is not None:
+        details.append(f"wind {wind:.1f} km/h")
+    if wave is not None:
+        details.append(f"waves {wave:.2f} m")
+    if rain is not None:
+        details.append(f"precipitation {rain:.1f} mm")
+    if air is not None:
+        details.append(f"air temperature {air:.1f} °C")
 
     return {
         "name": "Weather & Wind Agent",
-        "status": status,
-        "wind_kmh": wind,
-        "wave_height_m": waves,
-        "precipitation_mm": rain,
-        "air_temperature_c": air_temp,
-        "message": message + (
-            " These observations do not replace official marine forecasts."
+        "status": "OBSERVATIONS RECEIVED" if available else "DATA MISSING",
+        "wind": wind,
+        "wave": wave,
+        "rain": rain,
+        "air_temperature": air,
+        "message": (
+            "Available conditions: " + ", ".join(details)
+            if details else "No weather or marine conditions returned."
         ),
     }
 
 
-def historical_agent(hourly, manual_anomaly=None):
+def historical_agent(hourly):
     times = hourly.get("time", []) or []
     values = hourly.get("sea_surface_temperature", []) or []
 
-    observations = []
-    for t, v in zip(times, values):
-        number = safe_float(v)
-        if number is not None:
-            observations.append({"time": t, "sst": number})
+    rows = []
+    for timestamp, value in zip(times, values):
+        value = number(value)
+        if value is not None:
+            rows.append({"time": timestamp, "sst": value})
 
-    recent_change = None
-    if len(observations) >= 2:
-        recent_change = (
-            observations[-1]["sst"] - observations[0]["sst"]
-        )
+    change = None
 
-    anomaly = safe_float(manual_anomaly)
+    if len(rows) >= 2:
+        change = rows[-1]["sst"] - rows[0]["sst"]
 
-    if anomaly is not None:
-        status = "BASELINE INPUT RECEIVED"
-        message = (
-            f"Supplied anomaly: {anomaly:+.2f} °C. "
-            "Verify the source, reference period, and calculation."
-        )
-    elif recent_change is not None:
-        status = "RECENT PERIOD COMPARISON"
-        message = (
-            f"SST changed by {recent_change:+.2f} °C between the "
-            "first and latest available hourly values in the returned "
-            "period. This is not a long-term climate anomaly."
-        )
-    else:
+    if change is None:
         status = "BASELINE NEEDED"
         message = (
-            "Insufficient valid SST observations for a comparison. "
-            "A documented historical baseline is needed for an anomaly."
+            "Not enough valid SST observations to compare the "
+            "returned period. A longer historical baseline is "
+            "required for a climate anomaly."
+        )
+    else:
+        status = "RECENT PERIOD COMPARISON"
+        message = (
+            f"SST changed by {change:+.2f} °C across the returned "
+            "observations. This is not a long-term climate anomaly."
         )
 
     return {
         "name": "Historical Trend Agent",
         "status": status,
-        "observations": observations,
-        "recent_sst_change_c": recent_change,
-        "supplied_anomaly_c": anomaly,
+        "change": change,
+        "rows": rows,
         "message": message,
     }
 
 
-def satellite_agent(chlorophyll):
-    if safe_float(chlorophyll) is None:
+def satellite_agent(chl):
+    if chl.get("value") is not None and chl.get("source"):
         return {
             "name": "Satellite Intelligence Agent",
-            "status": "UNAVAILABLE",
+            "status": "CHLOROPHYLL SOURCE PROVIDED",
             "message": (
-                "No verified satellite data feed is connected. "
-                "Chlorophyll input alone does not establish a live "
-                "satellite connection."
+                "A chlorophyll observation and source label were returned. "
+                "Confirm that the source is a satellite product and inspect "
+                "its quality flags before treating it as satellite-verified."
             ),
         }
 
     return {
         "name": "Satellite Intelligence Agent",
-        "status": "SATELLITE FEED NOT VERIFIED",
+        "status": "UNAVAILABLE",
         "message": (
-            "A chlorophyll value was supplied, but the satellite feed "
-            "itself is not verified by this app. Confirm the product, "
-            "date, coordinates, and data provider."
+            "No verified satellite feed is connected. A source label "
+            "or manually entered value alone does not verify satellite access."
         ),
     }
 
 
 def reasoning_agent(agents):
-    missing = []
-    available = []
-
-    for agent in agents:
-        if agent["status"] in [
+    missing = [
+        agent["name"] for agent in agents
+        if agent["status"] in {
             "DATA MISSING",
             "UNAVAILABLE",
             "BASELINE NEEDED",
-        ]:
-            missing.append(agent["name"])
-        else:
-            available.append(agent["name"])
+        }
+    ]
+
+    available = [
+        agent["name"] for agent in agents
+        if agent["name"] not in missing
+    ]
 
     if missing:
         summary = (
@@ -418,28 +432,28 @@ def reasoning_agent(agents):
         )
     else:
         summary = (
-            "The configured indicators have values, but this does "
-            "not establish ecosystem health or ecological safety."
+            "Configured indicators returned observations. This is "
+            "not a validated ecological health prediction."
         )
 
     return {
         "summary": summary,
-        "available_agents": available,
         "missing_agents": missing,
+        "available_agents": available,
         "method": (
-            "Transparent data-availability screening. "
-            "Not a validated ecological prediction model."
+            "Evidence availability screening only; not a validated "
+            "ecological prediction model."
         ),
     }
 
 
-# ------------------------ Sidebar ------------------------
+# ----------------------- Sidebar -------------------------
 
 st.sidebar.markdown("## 🌊 ORCA")
-st.sidebar.caption("Marine Ecosystem Intelligence")
+st.sidebar.caption("Ocean Reasoning Collaborative Agency")
 
 page = st.sidebar.radio(
-    "Navigate",
+    "Navigation",
     [
         "Mission Control",
         "Agent Lab",
@@ -449,65 +463,32 @@ page = st.sidebar.radio(
     ],
 )
 
-region = st.sidebar.selectbox(
-    "Marine region",
-    list(REGIONS.keys()),
-)
-
+region = st.sidebar.selectbox("Marine region", list(REGIONS.keys()))
 latitude, longitude = REGIONS[region]
 
-st.sidebar.markdown("---")
-st.sidebar.markdown("### Optional verified inputs")
-
-st.sidebar.caption(
-    "Leave blank when you do not have a trustworthy source."
-)
-
-chlorophyll_text = st.sidebar.text_input(
-    "Chlorophyll-a (mg/m³)",
-    placeholder="e.g. 0.45",
-)
-
-anomaly_text = st.sidebar.text_input(
-    "SST anomaly (°C)",
-    placeholder="e.g. +1.2",
-)
-
-chlorophyll_input = safe_float(chlorophyll_text.strip()) \
-    if chlorophyll_text.strip() else None
-
-anomaly_input = safe_float(anomaly_text.strip()) \
-    if anomaly_text.strip() else None
-
-if chlorophyll_input is not None and chlorophyll_input < 0:
-    st.sidebar.error("Chlorophyll cannot be negative.")
-    chlorophyll_input = None
-
-if st.sidebar.button("🔄 Refresh live data", use_container_width=True):
-    fetch_live_data.clear()
+if st.sidebar.button("🔄 Refresh live data", width="stretch"):
+    fetch_marine_weather.clear()
     st.rerun()
 
-st.sidebar.markdown("---")
-st.sidebar.caption("Live data depends on API availability and region coverage.")
 
+# --------------------- Retrieve data ---------------------
 
-# ---------------------- Fetch data -----------------------
+with st.spinner("Fetching marine and weather observations..."):
+    live = fetch_marine_weather(latitude, longitude)
+    chlorophyll = fetch_chlorophyll(latitude, longitude)
 
-with st.spinner("Connecting to marine and weather APIs..."):
-    live = fetch_live_data(latitude, longitude)
+marine = live["marine"]
+hourly = live["hourly"]
+weather = live["weather"]
 
-marine = live.get("marine", {})
-hourly = live.get("marine_hourly", {})
-weather = live.get("weather", {})
-
-temp_agent = temperature_agent(marine)
-chl_agent = chlorophyll_agent(chlorophyll_input)
+sst_agent = sea_temperature_agent(marine)
+chl_agent = chlorophyll_agent(chlorophyll)
 weather_result = weather_agent(marine, weather)
-history_result = historical_agent(hourly, anomaly_input)
-satellite_result = satellite_agent(chlorophyll_input)
+history_result = historical_agent(hourly)
+satellite_result = satellite_agent(chlorophyll)
 
 agents = [
-    temp_agent,
+    sst_agent,
     history_result,
     chl_agent,
     satellite_result,
@@ -516,10 +497,7 @@ agents = [
 
 assessment = reasoning_agent(agents)
 
-# Optional FastAPI backend.
-# Set ORCA_API_URL to the deployed backend base URL.
 backend_url = os.getenv("ORCA_API_URL", "").strip()
-
 if not backend_url:
     try:
         backend_url = st.secrets.get("ORCA_API_URL", "").strip()
@@ -541,8 +519,7 @@ if backend_url:
                     "current": marine,
                     "hourly": hourly,
                     "weather": weather,
-                    "manual_chlorophyll_mg_m3": chlorophyll_input,
-                    "manual_sst_anomaly_c": anomaly_input,
+                    "chlorophyll": chlorophyll,
                 },
             },
             timeout=REQUEST_TIMEOUT,
@@ -553,29 +530,20 @@ if backend_url:
         backend_error = str(exc)
 
 
-# ---------------------- Header ---------------------------
+# ------------------------- Header ------------------------
 
 st.markdown(
     f"""
-    <div class="orca-hero">
-        <div style="font-size:14px; letter-spacing:3px; color:#70d6ff">
+    <div class="hero">
+        <div style="letter-spacing:3px;color:#70d6ff">
             OCEAN REASONING COLLABORATIVE AGENCY
         </div>
-        <h1 style="font-size:42px; margin-bottom:5px">
-            🌊 ORCA Mission Control
-        </h1>
-        <div class="orca-subtitle">
-            Six-agent marine intelligence · Live observations ·
-            Transparent evidence · {region}
-        </div>
+        <h1 style="font-size:40px">🌊 ORCA Mission Control</h1>
+        <p>Six-agent marine intelligence · Live observations · Evidence-based screening</p>
+        <p>Region: {region} · Coordinates: {latitude:.2f}, {longitude:.2f}</p>
     </div>
     """,
     unsafe_allow_html=True,
-)
-
-st.caption(
-    f"Coordinates: {latitude:.2f}, {longitude:.2f} · "
-    f"Data fetch: {live.get('fetched_at_utc', 'unknown')}"
 )
 
 
@@ -584,119 +552,75 @@ st.caption(
 if page == "Mission Control":
     st.subheader("Mission Control")
 
-    if live["marine_error"] and live["weather_error"]:
-        st.error("Both live API requests failed. Check connectivity and API responses.")
-    elif live["marine_error"]:
-        st.warning("Marine API unavailable; weather data may still be available.")
-    elif live["weather_error"]:
-        st.warning("Weather API unavailable; marine data may still be available.")
-    else:
+    if live["errors"]:
+        st.warning("Some API requests failed. See Data & Integrations for details.")
+    elif any([marine, weather]):
         st.success("At least one live API endpoint returned data.")
+    else:
+        st.error("No live observations were returned.")
 
-    c1, c2, c3, c4 = st.columns(4)
+    a, b, c, d = st.columns(4)
 
-    c1.metric(
-        "Wave height",
-        fmt(marine.get("wave_height"), " m"),
-        help="Marine API observation/model output",
-    )
-    c2.metric(
-        "Wind speed",
-        fmt(weather.get("wind_speed_10m"), " km/h"),
-        help="Weather API wind speed",
-    )
-    c3.metric(
-        "Air temperature",
-        fmt(weather.get("temperature_2m"), " °C"),
-        help="Air temperature is not sea-surface temperature",
-    )
-    c4.metric(
+    a.metric("Wave height", fmt(marine.get("wave_height"), " m"))
+    b.metric("Wind speed", fmt(weather.get("wind_speed_10m"), " km/h"))
+    c.metric("Air temperature", fmt(weather.get("temperature_2m"), " °C"))
+    d.metric(
         "Sea-surface temperature",
         fmt(marine.get("sea_surface_temperature"), " °C"),
-        help="Marine API SST; may be unavailable for some locations",
     )
 
-    c5, c6 = st.columns(2)
-    c5.metric(
+    e, f = st.columns(2)
+    e.metric(
         "Chlorophyll-a",
-        fmt(chlorophyll_input, " mg/m³", 3),
+        fmt(chlorophyll.get("value"), " mg/m³", 3),
     )
-    c6.metric(
+    f.metric(
         "Recent SST change",
-        fmt(history_result.get("recent_sst_change_c"), " °C"),
+        fmt(history_result.get("change"), " °C"),
     )
 
-    st.markdown("### Collaborative assessment")
+    st.subheader("Collaborative assessment")
     st.info(assessment["summary"])
     st.caption(assessment["method"])
 
-    if backend_url:
-        if backend_result is not None:
-            st.success("FastAPI backend responded successfully.")
-            show_evidence("Backend response", backend_result)
-        else:
-            st.warning("Backend URL is configured, but the request failed.")
-            st.caption(str(backend_error))
-    else:
+    if not backend_url:
         st.warning(
-            "Backend URL is not configured. The local six-agent "
-            "screening logic is being used."
+            "Backend URL is not configured. Local screening is active."
         )
+    elif backend_error:
+        st.error(f"Backend request failed: {backend_error}")
+    elif backend_result is not None:
+        st.success("FastAPI backend responded successfully.")
+        evidence("Backend response", backend_result)
 
-    st.markdown("### Agent activity")
+    st.subheader("Agent activity")
 
-    col_a, col_b = st.columns(2)
+    left, right = st.columns(2)
 
-    with col_a:
-        agent_card(
-            "🌡️",
-            "Sea Temperature Agent",
-            temp_agent["status"],
-            temp_agent["message"],
-        )
-        agent_card(
-            "📈",
-            "Historical Trend Agent",
-            history_result["status"],
-            history_result["message"],
-        )
-        agent_card(
-            "🟢",
-            "Chlorophyll Agent",
-            chl_agent["status"],
-            chl_agent["message"],
-        )
+    with left:
+        show_agent("🌡️", "Sea Temperature Agent",
+                   sst_agent["status"], sst_agent["message"])
+        show_agent("📈", "Historical Trend Agent",
+                   history_result["status"], history_result["message"])
+        show_agent("🟢", "Chlorophyll Agent",
+                   chl_agent["status"], chl_agent["message"])
 
-    with col_b:
-        agent_card(
-            "🛰️",
-            "Satellite Intelligence Agent",
-            satellite_result["status"],
-            satellite_result["message"],
-        )
-        agent_card(
-            "🌬️",
-            "Weather & Wind Agent",
-            weather_result["status"],
-            weather_result["message"],
-        )
-        agent_card(
-            "🧠",
-            "Reasoning Agent",
-            "SCREENING COMPLETE",
-            assessment["summary"],
-        )
+    with right:
+        show_agent("🛰️", "Satellite Intelligence Agent",
+                   satellite_result["status"], satellite_result["message"])
+        show_agent("🌬️", "Weather & Wind Agent",
+                   weather_result["status"], weather_result["message"])
+        show_agent("🧠", "Reasoning Agent",
+                   "SCREENING COMPLETE", assessment["summary"])
 
-    st.markdown("### Marine region map")
+    st.subheader("Marine region map")
 
     map_df = pd.DataFrame([{
         "Region": region,
         "Latitude": latitude,
         "Longitude": longitude,
-        "Wave height (m)": safe_float(marine.get("wave_height")),
-        "SST (°C)": safe_float(
-            marine.get("sea_surface_temperature")
-        ),
+        "Wave height (m)": number(marine.get("wave_height")),
+        "SST (°C)": number(marine.get("sea_surface_temperature")),
     }])
 
     fig = px.scatter_geo(
@@ -706,11 +630,11 @@ if page == "Mission Control":
         hover_name="Region",
         hover_data=["Wave height (m)", "SST (°C)"],
         projection="natural earth",
-        title=f"Selected marine region: {region}",
+        title="Selected marine region",
     )
+
     fig.update_layout(
         paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
         font_color="#eaf6ff",
         geo=dict(
             bgcolor="rgba(0,0,0,0)",
@@ -719,91 +643,67 @@ if page == "Mission Control":
             showland=True,
             landcolor="#183447",
             showcoastlines=True,
-            coastlinecolor="#5d879d",
         ),
         margin=dict(l=0, r=0, t=50, b=0),
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
-    show_evidence("Debug live data response", live)
+    evidence("Debug live data response", live)
+    evidence("Chlorophyll response", chlorophyll)
 
 
-# ----------------------- Agent Lab -----------------------
+# ------------------------- Agent Lab ---------------------
 
 elif page == "Agent Lab":
     st.subheader("Agent Lab")
-    st.write(
-        "Each specialist agent evaluates its own evidence. "
-        "Missing observations remain missing rather than being fabricated."
-    )
 
-    for item in agents:
-        st.markdown(f"### {item['name']}")
-        st.write(f"**Status:** {item['status']}")
-        st.write(item["message"])
-        with st.expander("Inspect agent evidence"):
-            st.text(safe_json(item))
+    for agent in agents:
+        st.markdown(f"### {agent['name']}")
+        st.write(f"**Status:** {agent['status']}")
+        st.write(agent["message"])
+        evidence(f"Inspect {agent['name']}", agent)
 
-    st.markdown("### Collaborative reasoning")
+    st.subheader("Reasoning Agent")
     st.info(assessment["summary"])
-    st.write("**Available agents:**")
-    st.write(assessment["available_agents"] or "None confirmed")
-    st.write("**Missing or incomplete agents:**")
-    st.write(assessment["missing_agents"] or "No missing status reported")
-    st.caption(assessment["method"])
+    st.write("**Available agents:**", assessment["available_agents"])
+    st.write("**Missing or incomplete agents:**", assessment["missing_agents"])
 
 
-# --------------------- Ocean Memory ----------------------
+# ----------------------- Ocean Memory --------------------
 
 elif page == "Ocean Memory":
     st.subheader("Ocean Memory")
-    st.write(
-        "Recent SST observations returned by the marine API. "
-        "This is a short-period comparison, not a climate anomaly."
-    )
 
-    times = hourly.get("time", []) or []
-    values = hourly.get("sea_surface_temperature", []) or []
-
-    rows = []
-    for t, v in zip(times, values):
-        number = safe_float(v)
-        if number is not None:
-            rows.append({"Time (UTC)": t, "SST (°C)": number})
+    rows = history_result.get("rows", [])
 
     if rows:
         history_df = pd.DataFrame(rows)
+
         st.line_chart(
-            history_df.set_index("Time (UTC)")["SST (°C)"]
+            history_df.set_index("time")["sst"],
+            width="stretch",
         )
 
-        first = history_df.iloc[0]["SST (°C)"]
-        last = history_df.iloc[-1]["SST (°C)"]
+        st.dataframe(history_df, width="stretch")
 
-        st.metric(
-            "Change across returned observations",
-            f"{last - first:+.2f} °C",
-        )
-        st.dataframe(history_df, use_container_width=True)
         st.download_button(
             "Download SST observations CSV",
             history_df.to_csv(index=False).encode("utf-8"),
             file_name="orca_sst_observations.csv",
             mime="text/csv",
+            width="stretch",
         )
+        st.info(history_result["message"])
     else:
-        st.warning(
-            "No SST time series returned. Check the marine API response "
-            "or select another region."
-        )
+        st.warning("No valid SST time series was returned.")
 
-    st.info(
-        "A real anomaly requires a documented reference baseline, "
-        "such as a multi-year climatology for the same location and season."
+    st.caption(
+        "A short-period SST difference is not a long-term climate anomaly. "
+        "A climate anomaly needs a documented historical reference baseline."
     )
 
 
-# -------------------- Evidence Report --------------------
+# ---------------------- Evidence Report ------------------
 
 elif page == "Evidence Report":
     st.subheader("Evidence Report")
@@ -816,30 +716,26 @@ elif page == "Evidence Report":
             "latitude": latitude,
             "longitude": longitude,
         },
-        "live_observations": {
-            "marine": marine,
-            "weather": weather,
-        },
+        "marine": marine,
+        "weather": weather,
+        "chlorophyll": chlorophyll,
         "agents": agents,
         "assessment": assessment,
         "backend_configured": bool(backend_url),
-        "backend_response": backend_result,
-        "api_errors": {
-            "marine": live.get("marine_error"),
-            "weather": live.get("weather_error"),
-            "backend": backend_error,
-        },
+        "backend_result": backend_result,
+        "api_errors": live["errors"],
+        "backend_error": backend_error,
     }
 
-    st.write("Export the evidence for inspection or demo review.")
     st.download_button(
-        "Download evidence report (JSON)",
-        data=safe_json(report),
+        "Download evidence report JSON",
+        safe_json(report),
         file_name="orca_evidence_report.json",
         mime="application/json",
+        width="stretch",
     )
 
-    show_evidence("Full evidence report", report)
+    evidence("Full evidence report", report)
 
 
 # ------------------ Data & Integrations ------------------
@@ -847,63 +743,66 @@ elif page == "Evidence Report":
 elif page == "Data & Integrations":
     st.subheader("Data & Integrations")
 
-    st.markdown("### Live API status")
-    st.write("**Marine API:**")
-    if live["marine_error"]:
-        st.error(live["marine_error"])
+    st.markdown("### Marine API")
+    if "marine" in live["errors"]:
+        st.error(live["errors"]["marine"])
     else:
         st.success("Marine endpoint returned a response.")
-        show_evidence("Marine API response", {
-            "current": marine,
-            "hourly_keys": list(hourly.keys()),
-        })
+        evidence("Marine current data", marine)
+        evidence("Marine hourly data", hourly)
 
-    st.write("**Weather API:**")
-    if live["weather_error"]:
-        st.error(live["weather_error"])
+    st.markdown("### Weather API")
+    if "weather" in live["errors"]:
+        st.error(live["errors"]["weather"])
     else:
         st.success("Weather endpoint returned a response.")
-        show_evidence("Weather API response", weather)
+        evidence("Weather current data", weather)
 
-    st.markdown("### Backend")
-    if backend_url:
-        st.write("Backend URL is configured.")
-        if backend_error:
-            st.error(f"Backend request failed: {backend_error}")
-        elif backend_result is not None:
-            st.success("Backend responded.")
-            show_evidence("Backend result", backend_result)
-    else:
-        st.warning(
-            "ORCA_API_URL is not configured. If your FastAPI backend "
-            "is deployed, add its base URL in Streamlit Cloud Secrets."
+    st.markdown("### Chlorophyll integration")
+    if chlorophyll.get("value") is not None:
+        st.success(
+            f"Chlorophyll value returned by: {chlorophyll.get('source')}"
         )
+        st.write("Observation time:", chlorophyll.get("time"))
+    else:
+        st.warning("Chlorophyll endpoint is not returning a verified value.")
+        st.write(chlorophyll.get("error"))
+
+    st.markdown("### FastAPI backend")
+    if not backend_url:
+        st.warning("ORCA_API_URL is not configured.")
+    elif backend_error:
+        st.error(backend_error)
+    else:
+        st.success("Backend responded.")
+        evidence("Backend response", backend_result)
 
     st.markdown("### Data limitations")
     st.markdown("""
-    - **SST:** Requested from Open-Meteo Marine API; availability varies by location.
-    - **Chlorophyll:** Requires a verified ocean-colour source or documented input.
-    - **Historical anomaly:** Requires a documented reference baseline.
-    - **Satellite status:** Not treated as connected merely because a value is manually entered.
-    - **Ecological risk:** This application is a screening prototype, not a validated prediction model.
+    - SST and waves: Open-Meteo Marine API.
+    - Wind and air temperature: Open-Meteo Weather API.
+    - Chlorophyll: requires a separate, verified ocean-colour source.
+    - Satellite status: requires source and product verification.
+    - Historical anomaly: requires a documented reference baseline.
+    - Assessment: data-availability screening, not a validated ecological model.
     """)
 
-    st.markdown("### Useful official data sources")
+    st.markdown("### Official data resources")
     st.markdown(
         "- [Open-Meteo Marine API](https://open-meteo.com/en/docs/marine-weather-api)\n"
-        "- [Copernicus Marine ocean-colour products](https://data.marine.copernicus.eu/)\n"
-        "- [Copernicus satellite ocean-colour information](https://www.copernicus.eu/en/access-data/copernicus-services-catalogue/ocean-colour-daily-data-1997-present-derived-satellite)"
+        "- [Copernicus Marine Data Store](https://data.marine.copernicus.eu/)\n"
+        "- [Copernicus satellite-derived chlorophyll-a data](https://www.copernicus.eu/en/access-data/copernicus-services-catalogue/ocean-colour-daily-data-1997-present-derived-satellite)"
     )
 
 
-# ------------------------ Footer -------------------------
+# --------------------------- Footer ----------------------
 
 st.markdown("---")
 st.caption(
     "ORCA · Ocean Reasoning Collaborative Agency · "
-    "Live data availability depends on source coverage. "
     "Not for navigation, emergency response, or definitive ecological diagnosis."
 )
+
 
 
 
